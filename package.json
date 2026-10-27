@@ -17,8 +17,7 @@
     "public:check": "bash scripts/check-public.sh",
     "secrets:gen": "bash scripts/gen-secrets.sh",
     "setup": "bun run scripts/setup.ts",
-    "site:audit": "bun run scripts/audit-site.ts",
-    "relay:build": "cd relay && go build ./..."
+    "site:audit": "bun run scripts/audit-site.ts"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
@@ -29,22 +28,19 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.15",
-    "@cloudflare/workers-types": "^4.20260612.1",
+    "@cloudflare/workers-types": "^5.20261027.1",
     "@types/node": "^25.0.0",
     "alchemy": "^0.93.7",
     "esbuild": "^0.25.10",
     "esbuild-svelte": "^0.9.5",
     "sharp": "0.35.1",
     "typescript": "^6.0.3",
-    "wrangler": "^4.92.0"
+    "wrangler": "^4.153.0"
   },
   "cloudflare": {
     "bindings": {
-      "RELAY_TOKEN": {
-        "description": "A random secret used by the TCP relay. Generate one with `openssl rand -hex 32`."
-      },
       "SSH_HOST_KEY_B64": {
-        "description": "A stable Ed25519 SSH host key. Generate both secrets with `bun run secrets:gen`."
+        "description": "A stable Ed25519 SSH host key. Generate one with `bun run secrets:gen`."
       }
     }
   }

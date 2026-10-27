@@ -8,17 +8,52 @@ import Site from './site.svelte';
 
 interface Env {
   TUIPORT: DurableObjectNamespace<TuiportContainer>;
-  RELAY_TOKEN: string;
   SSH_HOST_KEY_B64: string;
+}
+
+const SSH_PORT = 2222;
+
+/** Pipe two duplex sockets together until either side closes, then close both. */
+async function splice(a: Socket, b: Socket): Promise<void> {
+  try {
+    await Promise.all([a.readable.pipeTo(b.writable), b.readable.pipeTo(a.writable)]);
+  } catch {
+    // Either peer disconnecting mid-stream surfaces as a pipe error; nothing to report.
+  } finally {
+    await Promise.allSettled([a.close(), b.close()]);
+  }
 }
 
 export class TuiportContainer extends Container<Env> {
   defaultPort = 8080;
-  requiredPorts = [8080, 2222];
+  requiredPorts = [8080, SSH_PORT];
   sleepAfter = '10m';
   envVars = {
     SSH_HOST_KEY_B64: this.env.SSH_HOST_KEY_B64 || '',
   };
+  private openSshSessions = 0;
+
+  /** Inbound TCP from the Worker: splice it straight onto the Container's SSH port. */
+  override async connect(socket: Socket): Promise<void> {
+    await this.startAndWaitForPorts();
+    const container = this.ctx.container;
+    if (!container) throw new Error('Container binding unavailable');
+    const upstream = container.getTcpPort(SSH_PORT).connect(`10.0.0.1:${SSH_PORT}`);
+    this.openSshSessions += 1;
+    try {
+      await upstream.opened;
+      await splice(socket, upstream);
+    } finally {
+      this.openSshSessions -= 1;
+      this.renewActivityTimeout();
+    }
+  }
+
+  /** Never put the Container to sleep while an SSH session is open. */
+  override async onActivityExpired(): Promise<void> {
+    if (this.openSshSessions > 0) return this.renewActivityTimeout();
+    await super.onActivityExpired();
+  }
 }
 
 const origin = 'https://tuiport.coey.dev';
@@ -36,14 +71,14 @@ const pages = {
     section: 'tutorial',
     title: 'Deploy OpenTUI over SSH to Cloudflare — Tuiport Tutorial',
     description:
-      'Deploy Tuiport to your Cloudflare account, configure the authenticated relay, add Spectrum, and connect with an ordinary SSH client.',
+      'Deploy Tuiport to your Cloudflare account, point a Spectrum application at the Worker, and connect with an ordinary SSH client.',
     eyebrow: 'Tutorial · get a working deployment',
   },
   '/how-to': {
     section: 'how-to',
     title: 'Customize OpenTUI SSH on Cloudflare — Tuiport How-to Guides',
     description:
-      'Customize the OpenTUI renderer, restrict SSH keys, rotate relay credentials, run locally, and configure a custom hostname.',
+      'Customize the OpenTUI renderer, restrict SSH keys, run locally, and configure a custom hostname.',
     eyebrow: 'How-to · solve a specific problem',
   },
   '/reference': {
@@ -55,10 +90,10 @@ const pages = {
   },
   '/explanation': {
     section: 'explanation',
-    title: 'Why OpenTUI SSH Needs a TCP Bridge on Cloudflare — Tuiport',
+    title: 'How OpenTUI SSH Runs Entirely on Cloudflare — Tuiport',
     description:
-      'Understand the narrow TCP-to-WebSocket bridge between Cloudflare Spectrum and an OpenTUI SSH server inside a Cloudflare Container.',
-    eyebrow: 'Explanation · why the bridge exists',
+      'How Spectrum hands raw SSH TCP to a Worker connect() handler, which splices it into an OpenTUI SSH server inside a Cloudflare Container.',
+    eyebrow: 'Explanation · how the TCP path works',
   },
   '/offline': {
     section: 'offline',
@@ -236,17 +271,6 @@ app.get('/ws/demo', async (c) => {
   );
 });
 
-app.get('/bridge', async (c) => {
-  if (c.req.header('upgrade')?.toLowerCase() !== 'websocket') {
-    return c.text('WebSocket upgrade required', 426);
-  }
-  const supplied = c.req.header('authorization');
-  if (!c.env.RELAY_TOKEN || supplied !== `Bearer ${c.env.RELAY_TOKEN}`) {
-    return c.text('Unauthorized', 401);
-  }
-  return getContainer(c.env.TUIPORT, 'default').fetch(c.req.raw);
-});
-
 const notFoundPage = {
   section: 'not-found',
   title: 'Page not found — Tuiport',
@@ -266,4 +290,11 @@ app.notFound(async (c) => {
   return new Response(response.body, { status: 404, headers: response.headers });
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  /** Raw SSH TCP from a Spectrum application whose origin is this Worker. */
+  async connect(socket, env) {
+    const container = getContainer(env.TUIPORT, 'default');
+    await splice(socket, container.connect(`tuiport:${SSH_PORT}`));
+  },
+} satisfies ExportedHandler<Env>;

@@ -1,6 +1,5 @@
 User-agent: *
 Allow: /
-Disallow: /bridge
 Disallow: /ws/
 Disallow: /api/
 

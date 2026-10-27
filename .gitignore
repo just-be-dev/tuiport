@@ -10,5 +10,3 @@ public.generated.ts
 *.key
 *_host_key
 .DS_Store
-relay/tuiport-relay
-relay/relay

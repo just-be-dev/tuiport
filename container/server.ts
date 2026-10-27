@@ -1,4 +1,3 @@
-import { connect } from 'node:net';
 import { Readable, Writable } from 'node:stream';
 import { BoxRenderable, type CliRenderer, createCliRenderer, TextRenderable } from '@opentui/core';
 import { createServer } from '@opentui/ssh';
@@ -20,8 +19,6 @@ type DemoRuntime = {
 };
 
 type SocketData = {
-  mode: 'ssh' | 'demo';
-  socket?: ReturnType<typeof connect>;
   demo?: DemoRuntime;
   cols?: number;
   rows?: number;
@@ -131,7 +128,7 @@ const ssh = createServer({
 }).serve((session) => {
   mountTuiport(session.renderer, {
     identity: session.identity.username,
-    environment: 'SSH / Cloudflare Spectrum',
+    environment: 'SSH / Spectrum → Worker connect()',
     onEnd: () => session.end(),
   });
 });
@@ -222,42 +219,26 @@ async function openDemo(ws: Bun.ServerWebSocket<SocketData>) {
 Bun.serve<SocketData>({
   port: 8080,
   fetch(request, server) {
-    const url = new URL(request.url);
+    const url = URL.parse(request.url);
+    if (!url) return new Response('bad request', { status: 400 });
     const innerPath = request.headers.get('x-tuiport-inner-path') || url.pathname;
     if (innerPath === '/health') return Response.json({ ok: true, service: 'tuiport' });
     if (innerPath === '/demo') {
       const cols = Number(url.searchParams.get('cols')) || 80;
       const rows = Number(url.searchParams.get('rows')) || 24;
       const colo = request.headers.get('x-tuiport-colo') || 'Cloudflare edge';
-      if (!server.upgrade(request, { data: { mode: 'demo', cols, rows, colo } })) {
+      if (!server.upgrade(request, { data: { cols, rows, colo } })) {
         return new Response('upgrade required', { status: 426 });
       }
       return;
     }
-    if (innerPath !== '/bridge') return new Response('not found', { status: 404 });
-    if (!server.upgrade(request, { data: { mode: 'ssh' } })) {
-      return new Response('upgrade required', { status: 426 });
-    }
+    return new Response('not found', { status: 404 });
   },
   websocket: {
     open(ws) {
-      if (ws.data.mode === 'demo') {
-        void openDemo(ws);
-        return;
-      }
-      const socket = connect({ host: '127.0.0.1', port: 2222 });
-      ws.data.socket = socket;
-      socket.on('data', (chunk) => ws.send(chunk));
-      socket.on('close', () => ws.close());
-      socket.on('error', () => ws.close(1011, 'ssh bridge failed'));
+      void openDemo(ws);
     },
     message(ws, message) {
-      if (ws.data.mode === 'ssh') {
-        ws.data.socket?.write(
-          typeof message === 'string' ? Buffer.from(message) : Buffer.from(message),
-        );
-        return;
-      }
       const demo = ws.data.demo;
       if (!demo || demo.closed) return;
       touchDemo(ws);
@@ -285,8 +266,7 @@ Bun.serve<SocketData>({
       if (bytes.byteLength <= MAX_INPUT_BYTES) demo.stdin?.push(bytes);
     },
     close(ws) {
-      if (ws.data.mode === 'demo') closeDemo(ws);
-      else ws.data.socket?.destroy();
+      closeDemo(ws);
     },
   },
 });

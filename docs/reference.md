@@ -1,9 +1,10 @@
 # Reference
 
-## Worker routes
+## Worker entry points
 
-| Route | Contract |
+| Entry | Contract |
 |---|---|
+| `connect()` | Raw TCP from a Spectrum worker-origin application; spliced to Container port `2222` |
 | `GET /` | Public svelte-hono site |
 | `GET /tutorial` | Tutorial |
 | `GET /how-to` | Task-oriented guides |
@@ -11,16 +12,15 @@
 | `GET /explanation` | Architecture explanation |
 | `GET /api/health` | Reports Worker readiness without waking the Container |
 | `WS /ws/demo` | Same-origin, constrained OpenTUI browser session; no shell |
-| `WS /bridge` | Binary SSH stream; bearer token required |
 
 ## Ports
 
 | Port | Location | Purpose |
 |---|---|---|
-| `22` | relay/Spectrum edge | public SSH |
+| `22` | Spectrum edge | public SSH |
 | `2222` | Container | `@opentui/ssh` server |
-| `8080` | Container | health and WebSocket bridge |
-| `443` | Worker | docs and authenticated bridge |
+| `8080` | Container | health and browser-demo WebSocket |
+| `443` | Worker | docs and browser demo |
 
 ## Resources
 
@@ -28,11 +28,10 @@
 - Durable Object / Container class: `TuiportContainer`
 - Container size: `lite`
 - Maximum instances: `1`
-- Sleep timeout: `10m`
+- Sleep timeout: `10m` (deferred while any SSH socket is open)
+- Spectrum application: `protocol: tcp/22`, `traffic_type: worker`, `origin_worker_id: <script tag>`, `tls: off`
 
 ## Configuration
-
-`RELAY_TOKEN` is required in production. Requests to `/bridge` must include `Authorization: Bearer <RELAY_TOKEN>`.
 
 `SSH_HOST_KEY_B64` is a base64-encoded Ed25519 private key in PEM form. If omitted, the Container generates an ephemeral development key.
 

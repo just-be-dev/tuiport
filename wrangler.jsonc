@@ -2,14 +2,14 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tuiport",
   "main": "build/worker.bundled.mjs",
-  "compatibility_date": "2026-06-12",
+  "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": { "enabled": true },
-  // RELAY_TOKEN and SSH_HOST_KEY_B64 are NOT required to deploy. The site and
-  // browser demo run with no secrets; `/bridge` stays closed (401) and the
-  // Container uses an ephemeral host key until `bun run setup` enables public
-  // SSH. This keeps first deploy zero-config.
+  // SSH_HOST_KEY_B64 is NOT required to deploy. Without it the Container uses an
+  // ephemeral host key; `bun run setup` stores a stable one. Public SSH arrives
+  // through the Worker's `connect()` handler from a Spectrum application whose
+  // origin is this Worker — no extra config is needed here.
   "build": { "command": "bun run build" },
   "containers": [
     {

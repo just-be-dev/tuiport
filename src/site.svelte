@@ -215,15 +215,15 @@
 
     <div class="flow" role="group" aria-label="Architecture">
       <div><b>01</b><strong>SSH client</strong><span>unchanged OpenSSH</span></div><i>→</i>
-      <div><b>02</b><strong>TCP relay</strong><span>bytes only</span></div><i>→</i>
-      <div class="cloud"><b>03</b><strong>Cloudflare</strong><span>Worker · DO · Container</span></div><i>→</i>
+      <div><b>02</b><strong>Spectrum</strong><span>public tcp/22</span></div><i>→</i>
+      <div class="cloud"><b>03</b><strong>Cloudflare</strong><span>connect() · DO · Container</span></div><i>→</i>
       <div><b>04</b><strong>OpenTUI</strong><span>your application</span></div>
     </div>
 
     <div class="cards">
       <article><span>01</span><h2>Real SSH</h2><p>The product path needs no browser terminal or custom client. PTYs, resize events, SSH keys, and terminal capabilities arrive intact.</p></article>
-      <article><span>02</span><h2>Tiny boundary</h2><p>The relay terminates nothing. It forwards opaque bytes over an authenticated WebSocket; the SSH server stays in your Container.</p></article>
-      <article><span>03</span><h2>Made to disappear</h2><p>When Cloudflare accepts inbound TCP natively, remove the relay. The app and its OpenTUI session code do not change.</p></article>
+      <article><span>02</span><h2>Native TCP</h2><p>Spectrum hands the raw socket to the Worker's <code>connect()</code> handler, which splices it onto the Container's SSH port. Nothing in between reads the session.</p></article>
+      <article><span>03</span><h2>All Cloudflare</h2><p>No relay host, no WebSocket tunnel, no shared token. One Worker, one Container, one Spectrum application.</p></article>
     </div>
 
     <section class="dogfood" aria-labelledby="dogfood-title">
@@ -263,16 +263,18 @@
       <pre><code>bun install
 wrangler login      # or `bun run setup` starts it for you
 bun run setup</code></pre>
-      <p><code>bun run setup</code> deploys the Worker and Container to the account you are logged into, generates <code>RELAY_TOKEN</code> and <code>SSH_HOST_KEY_B64</code>, stores them with the bulk secrets API, and prints your deployed URL. No secret is pasted into a web form.</p>
+      <p><code>bun run setup</code> deploys the Worker and Container to the account you are logged into, generates a stable <code>SSH_HOST_KEY_B64</code>, stores it with the bulk secrets API, and prints your deployed URL and Worker script tag. No secret is pasted into a web form.</p>
       <p>Prefer no local toolchain? The <a class="primary" href="https://deploy.workers.cloudflare.com/?url=https://github.com/acoyfellow/tuiport">Deploy to Cloudflare</a> button also works and needs no secrets — run <code>bun run setup</code> afterward to enable SSH.</p>
-      <h2>Step 2 — Expose <code>ssh &lt;hostname&gt;</code> (optional)</h2><p>A separate step, because Workers and Containers cannot yet accept direct inbound TCP. Run the relay on a host with a public TCP address:</p>
-      <pre><code>cd relay
-go build
-./tuiport-relay \
-  -listen :22 \
-  -upstream wss://YOUR-WORKER.workers.dev/bridge \
-  -token "$RELAY_TOKEN"      # saved in .dev.vars by setup</code></pre>
-      <p>Then point <a href="https://developers.cloudflare.com/spectrum/">Cloudflare Spectrum</a> (a public TCP proxy, paid plan) at the relay: one SSH application sending <code>ssh.example.com:22</code> to the relay's address on port 22. Spectrum is configured separately because neither the deploy button nor <code>setup</code> can provision it.</p>
+      <h2>Step 2 — Expose <code>ssh &lt;hostname&gt;</code> (optional)</h2><p>Create one <a href="https://developers.cloudflare.com/spectrum/">Cloudflare Spectrum</a> application (paid zone) whose origin is the Worker itself. <code>setup</code> prints this command with your script tag filled in:</p>
+      <pre><code>curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/spectrum/apps" \
+  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --json '&#123;
+    "protocol": "tcp/22",
+    "dns": &#123; "type": "CNAME", "name": "ssh.example.com" &#125;,
+    "traffic_type": "worker",
+    "origin_worker_id": "YOUR_WORKER_SCRIPT_TAG",
+    "tls": "off"
+  &#125;'</code></pre>
       <h2>Connect</h2><pre><code>ssh ssh.example.com</code></pre><p>The sample accepts any valid public key and uses its verified fingerprint as identity. Replace that policy before serving private data.</p>
     </article>
   {:else if section === 'how-to'}
@@ -296,19 +298,18 @@ ssh -p 2222 localhost</code></pre><p><code>bun run local</code> builds and runs 
       <table><tbody>
         <tr><th><code>GET /</code></th><td>Public svelte-hono documentation.</td></tr>
         <tr><th><code>GET /api/health</code></th><td>Reports Worker readiness without waking the Container.</td></tr>
-        <tr><th><code>WS /bridge</code></th><td>Opaque SSH byte stream. Requires <code>Authorization: Bearer …</code>.</td></tr>
-        <tr><th><code>:8080</code></th><td>Container HTTP and WebSocket bridge.</td></tr>
+        <tr><th><code>connect()</code></th><td>Raw SSH TCP from Spectrum, spliced to Container port 2222.</td></tr>
+        <tr><th><code>:8080</code></th><td>Container health and browser-demo WebSocket.</td></tr>
         <tr><th><code>:2222</code></th><td><code>@opentui/ssh</code> inside the Container.</td></tr>
       </tbody></table>
       <h2>Cloudflare resources</h2><ul><li>one Worker</li><li>one Durable Object namespace</li><li>one Container application, maximum one lite instance</li></ul>
-      <h2>Environment</h2><p><code>RELAY_TOKEN</code> is the only secret. It authenticates the relay to the Worker; it does not authenticate SSH users.</p>
-      <h2>Lifecycle</h2><p>The Container sleeps after ten minutes without Worker traffic. The first new connection starts it. An active bridge keeps it in use.</p>
+      <h2>Environment</h2><p><code>SSH_HOST_KEY_B64</code> is the only secret: a stable SSH host key. Without it the Container generates an ephemeral one.</p>
+      <h2>Lifecycle</h2><p>The Container sleeps after ten minutes without Worker traffic. The first new connection starts it. Any open SSH socket keeps it awake.</p>
     </article>
   {:else if section === 'explanation'}
-    <article class="doc"><h1>Why Tuiport has a relay</h1><p class="summary">Cloudflare can host the complete application today, but it cannot yet accept the first raw TCP byte directly into a Worker or Container.</p>
-      <h2>The missing edge</h2><p>Workers TCP sockets are outbound. Container ports are reachable through their Durable Object, but only over HTTP/WebSocket fetches. Cloudflare Tunnel can expose SSH when the client runs <code>cloudflared</code>; that changes the desired <code>ssh host</code> experience.</p>
-      <h2>The narrow bridge</h2><p>Spectrum accepts public SSH traffic. Today its raw TCP origin must have a reachable TCP address; Spectrum-to-Tunnel supports HTTP/HTTPS only. Tuiport therefore uses a stateless TCP-to-WebSocket relay. It cannot decrypt SSH and stores no session state.</p>
-      <h2>Deletion is the design</h2><p>The application speaks SSH only inside the Container. Native inbound TCP can replace the relay and WebSocket route without rewriting the OpenTUI app. This repository is both a working proof and a precise request for that platform seam.</p>
+    <article class="doc"><h1>How SSH reaches the Container</h1><p class="summary">Cloudflare accepts the first raw TCP byte directly: Spectrum hands it to a Worker, and the Worker hands it to the Container.</p>
+      <h2>The path</h2><p>A Spectrum application with a Worker origin accepts public SSH on port 22 and invokes the Worker's <code>connect()</code> handler with the raw socket. The Worker forwards it to the singleton Container's Durable Object, which splices it onto <code>getTcpPort(2222)</code>. Every hop moves opaque bytes; SSH is spoken only inside the Container.</p>
+      <h2>What went away</h2><p>Earlier versions needed a Go relay on a public host, a token-authenticated WebSocket route on the Worker, and a WebSocket-to-TCP bridge inside the Container, because Workers could not accept inbound TCP. Native inbound TCP removed all three. The OpenTUI application did not change.</p>
     </article>
   {:else if section === 'offline'}
     <article class="doc"><h1>You are offline.</h1><p class="summary">The Tuiport application shell is cached. Reconnect to refresh the documentation or open a page you have visited before.</p><p><a class="secondary" href="/">Return home</a></p></article>

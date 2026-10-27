@@ -14,15 +14,11 @@ createServer({
 });
 ```
 
-Copy the allowlist into the image in `container/Dockerfile`. The relay token authenticates the relay, not the SSH user.
-
-## Rotate the relay token
-
-Update the Worker secret, restart every relay with the new value, and verify old relays receive HTTP 401 from `/bridge`.
+Copy the allowlist into the image in `container/Dockerfile`.
 
 ## Use a custom domain for the docs
 
-Add a Worker custom domain in the dashboard or change `domainName` in `alchemy.run.ts`. The web and SSH services may share a hostname because they listen on ports 443 and 22.
+Add a Worker custom domain in the dashboard or change `domainName` in `alchemy.run.ts`. The SSH hostname is the Spectrum application's DNS name; web and SSH may share a hostname because they listen on ports 443 and 22.
 
 ## Run the Container directly
 

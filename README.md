@@ -18,14 +18,14 @@ bun run local
 ssh -p 2222 localhost
 ```
 
-Tuiport keeps the SSH server and application on Cloudflare. A 70-line stateless relay carries encrypted SSH bytes from a public TCP address to the Worker because Workers and Containers do not yet accept direct inbound TCP.
+Everything runs on Cloudflare. A Spectrum application hands raw SSH TCP to the Worker's `connect()` handler, which splices it through the Container's Durable Object straight onto the SSH port:
 
 ```text
-OpenSSH ──TCP──▶ Spectrum ──TCP──▶ relay ──WSS──▶ Worker ──▶ Container
-                                                               └─ @opentui/ssh
+OpenSSH ──TCP──▶ Spectrum ──▶ Worker connect() ──▶ Durable Object ──▶ Container :2222
+                                                                       └─ @opentui/ssh
 ```
 
-The relay cannot read the SSH session. It only converts transports and is designed to be deleted when Cloudflare supports native TCP ingress to a Container.
+No relay host, no WebSocket tunnel, no shared token. Nothing in the path can read the SSH session.
 
 ## Live browser session
 
@@ -51,9 +51,9 @@ bun run setup
 ```
 
 `bun run setup` deploys the Worker and Container to the account you are logged
-into, generates `RELAY_TOKEN` and `SSH_HOST_KEY_B64` for you, and stores them
-with the bulk secrets API. No secret is ever pasted into a web form. It prints
-your deployed URL when it finishes.
+into, generates a stable `SSH_HOST_KEY_B64`, and stores it with the bulk secrets
+API. No secret is ever pasted into a web form. It prints your deployed URL and
+the Spectrum command for Step 2 when it finishes.
 
 Prefer no local toolchain? The **Deploy to Cloudflare** button above also works
 and requires no secrets — it gives you the site and browser demo. Run `bun run
@@ -61,25 +61,22 @@ setup` (or Step 2) afterward to enable SSH.
 
 ### Step 2 — Expose plain `ssh <hostname>` (optional)
 
-This is a separate step from the deploy, because Workers and Containers cannot
-yet accept direct inbound TCP.
+Create one Spectrum application (paid zone) whose origin is the Worker. `setup`
+prints this with your Worker's script tag filled in:
 
-1. Run the relay on any host with a public TCP address:
+```sh
+curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/spectrum/apps" \
+  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --json '{
+    "protocol": "tcp/22",
+    "dns": { "type": "CNAME", "name": "ssh.example.com" },
+    "traffic_type": "worker",
+    "origin_worker_id": "YOUR_WORKER_SCRIPT_TAG",
+    "tls": "off"
+  }'
+```
 
-   ```sh
-   cd relay && go build
-   ./tuiport-relay \
-     -listen :22 \
-     -upstream wss://YOUR-WORKER.workers.dev/bridge \
-     -token "$RELAY_TOKEN"          # value saved in .dev.vars by setup
-   ```
-
-2. Point a Cloudflare Spectrum SSH application (tcp/22) at the relay.
-3. Connect with `ssh your-hostname`.
-
-Spectrum is configured separately because the Deploy button and `setup` do not
-provision it. `setup` saves `RELAY_TOKEN` and `SSH_HOST_KEY_B64` to `.dev.vars`
-(gitignored) so the relay can reuse the same values.
+Then `ssh ssh.example.com`.
 
 ## Make it yours
 
@@ -97,9 +94,8 @@ The sample accepts any **verified** public key. Set `SSH_HOST_KEY_B64` before sh
 
 | Path | Purpose |
 |---|---|
-| `src/` | svelte-hono site, embedded cloudterm session, routing, and Container binding |
-| `container/` | OpenTUI SSH application and local byte bridge |
-| `relay/` | minimal TCP-to-WebSocket adapter |
+| `src/` | svelte-hono site, embedded cloudterm session, routing, `connect()` TCP handler, and Container binding |
+| `container/` | OpenTUI SSH application and browser-demo server |
 | `docs/` | Diátaxis documentation |
 | `wrangler.jsonc` | portable one-click deployment |
 | `alchemy.run.ts` | custom-domain deployment for `tuiport.coey.dev` |
@@ -129,7 +125,7 @@ Run the Worker development server separately with `bun run dev`. Run `bun run ch
 
 ## Status
 
-Tuiport is a focused proof, version `0.0.1`. The Cloudflare application is real; the only non-Cloudflare runtime requirement is the public TCP relay described above.
+Tuiport is a focused proof, version `0.0.1`. Every runtime component runs on Cloudflare.
 
 ## License
 

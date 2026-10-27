@@ -1,27 +1,29 @@
-# Explanation: why the relay exists
+# Explanation: how SSH reaches the Container
 
 Tuiport aims to preserve one interface: `ssh hostname`. That means the first connection is arbitrary inbound TCP, not HTTP and not a client-side Cloudflare Tunnel command.
 
-Workers currently create outbound TCP sockets but cannot receive inbound TCP. Containers expose HTTP and WebSocket requests through a Durable Object; their ports are not public Internet origins. Wrangler's Container SSH path is authenticated operator access and is intentionally not public.
+Cloudflare now delivers that TCP natively:
 
-Spectrum accepts public SSH, but a raw TCP Spectrum application cannot use Cloudflare Tunnel as its origin. It therefore needs an origin with a reachable TCP address.
+```text
+OpenSSH ──TCP──▶ Spectrum ──▶ Worker connect() ──▶ Durable Object connect() ──▶ Container :2222
+                 (worker origin)                                                  └─ @opentui/ssh
+```
 
-Tuiport reduces that origin to a transport adapter:
+1. A Spectrum application with `traffic_type: "worker"` accepts public SSH on port 22 and hands the raw socket to the Worker's `connect()` handler.
+2. The Worker calls `connect()` on the singleton `TuiportContainer` Durable Object stub, forwarding the socket.
+3. The Durable Object starts the Container if needed and splices the socket onto `ctx.container.getTcpPort(2222)`.
+4. SSH encryption, authentication, PTY handling, and application rendering all happen in the Container.
 
-1. Spectrum sends the encrypted SSH stream to the relay.
-2. The relay opens an authenticated WebSocket to the Worker.
-3. The Worker routes it to the singleton Container.
-4. A local bridge sends the bytes to `@opentui/ssh` on port 2222.
-5. SSH encryption, authentication, PTY handling, and application rendering all happen in the Container.
+No hop in this path parses the stream. There is no relay host, no TCP-to-WebSocket conversion, and no shared bearer token: the only thing that can reach the Worker's `connect()` handler is a Spectrum application (or service binding) in your own account.
 
-The relay has no key material and cannot interpret the encrypted session. It is still a runtime dependency, so the design keeps it stateless and under 100 lines.
+While any SSH socket is open, the Durable Object refuses to let the Container go idle, so long sessions survive the `sleepAfter` window.
 
-When Cloudflare supports direct TCP ingress into a Worker or Container binding, steps 1–3 collapse into the native ingress. The OpenTUI application remains unchanged. Deleting the relay is an intended migration, not a rewrite.
+## History
+
+Earlier versions of Tuiport ran a small Go relay on a public host because Workers could not accept inbound TCP. Spectrum forwarded SSH to the relay, which tunnelled the bytes over an authenticated WebSocket to a `/bridge` route on the Worker, and a bridge inside the Container converted them back to TCP. Native inbound TCP made all three pieces unnecessary; the OpenTUI application did not change.
 
 ## Public sources
 
-The platform boundary described here comes entirely from public Cloudflare documentation:
-
-- [Workers TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/) documents outbound TCP and states that inbound TCP is not currently available.
-- [Containers SSH](https://developers.cloudflare.com/containers/ssh/) documents the authenticated Wrangler path and states that it does not expose a public port.
-- [Spectrum limitations](https://developers.cloudflare.com/spectrum/reference/limitations/) states that raw TCP Spectrum applications cannot use Cloudflare Tunnel as an origin.
+- [Workers connect() handler](https://developers.cloudflare.com/workers/runtime-apis/handlers/connect/)
+- [Workers and Containers now support inbound TCP connections](https://blog.cloudflare.com/grpc-workers/)
+- [Spectrum application API (`traffic_type: "worker"`, `origin_worker_id`)](https://developers.cloudflare.com/api/resources/spectrum/subresources/apps/methods/create/)
